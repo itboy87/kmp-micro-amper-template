@@ -16,14 +16,14 @@ mavenPublishing {
                 url.set("https://opensource.org/licenses/Apache-2.0")
             }
         }
-        url.set("https://github.com/fleeksoft/kmp-micro-amper-template")
+        url.set("https://github.com/itboy87/kmp-micro-amper-template")
         issueManagement {
             system.set("Github")
-            url.set("https://github.com/fleeksoft/kmp-micro-amper-template/issues")
+            url.set("https://github.com/itboy87/kmp-micro-amper-template/issues")
         }
         scm {
-            connection.set("https://github.com/fleeksoft/kmp-micro-amper-template.git")
-            url.set("https://github.com/fleeksoft/kmp-micro-amper-template")
+            connection.set("https://github.com/itboy87/kmp-micro-amper-template.git")
+            url.set("https://github.com/itboy87/kmp-micro-amper-template")
         }
         developers {
             developer {

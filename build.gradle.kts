@@ -7,6 +7,7 @@ import kotlin.jvm.optionals.getOrNull
 plugins {
     alias(libs.plugins.kmp)
     alias(libs.plugins.androidLibrary)
+    alias(libs.plugins.mavenPublish) apply false
 }
 
 val libFinder = versionCatalogs.find("libs").get()
@@ -24,9 +25,9 @@ kotlin {
 allprojects {
     repositories {
         mavenCentral()
-        mavenLocal()
         google()
         gradlePluginPortal()
+        mavenLocal()
         maven("https://maven.pkg.jetbrains.space/kotlin/p/kotlin/dev")
     }
     version = REAL_VERSION
@@ -100,6 +101,11 @@ class MicroAmper(val project: Project) {
     private var deps = mutableListOf<Dep>()
     private var repos = mutableListOf<String>()
 
+    private var publishingEnabled = false
+    private var publishingVersion: String? = null
+    private var publishingGroup: String? = null
+    private var publishingName: String? = null
+
     //val kotlinBasePlatforms by lazy { kotlinPlatforms.groupBy { getKotlinBasePlatform(it) }.filter { it.value != listOf(it.key) } }
     val kotlinBasePlatforms by lazy { kotlinPlatforms.groupBy { getKotlinBasePlatform(it) } }
 
@@ -123,10 +129,28 @@ class MicroAmper(val project: Project) {
     }
 
     fun parseFile(file: File, lines: List<String> = file.readLines()) {
+        val modeStack = mutableListOf<Pair<Int, String>>()
         var mode = ""
 
         for (line in lines) {
             val tline = line.substringBeforeLast('#').trim().takeIf { it.isNotEmpty() } ?: continue
+            val indent = line.takeWhile { it == ' ' || it == '\t' }.length
+
+            if (indent == 0 && !tline.startsWith("-")) {
+                modeStack.clear()
+            } else {
+                while (modeStack.isNotEmpty() && modeStack.last().first >= indent) {
+                    modeStack.removeAt(modeStack.size - 1)
+                }
+            }
+
+            if (tline.endsWith(":") && !tline.startsWith("-")) {
+                modeStack.add(indent to tline.trimEnd(':').trim())
+                mode = modeStack.joinToString(":") { it.second }
+                continue
+            }
+
+            mode = modeStack.joinToString(":") { it.second }
 
             if (line.startsWith(" ") || line.startsWith("\t") || line.startsWith("-")) {
                 when {
@@ -184,11 +208,19 @@ class MicroAmper(val project: Project) {
                             println("platform not included: $platform in $project")
                         }
                     }
+
+                    mode == "settings:publishing" -> {
+                        val key = tline.substringBefore(':').trim()
+                        val value = tline.substringAfter(':').trim()
+                        when (key) {
+                            "version" -> publishingVersion = value
+                            "group" -> publishingGroup = value
+                            "name" -> publishingName = value
+                            "enabled" -> publishingEnabled = value == "true"
+                        }
+                    }
                 }
             } else {
-                if (tline.endsWith(":")) {
-                    mode = tline.trimEnd(':').trim()
-                }
                 if (tline.startsWith("apply:")) {
                     val paths = tline.substringAfter(':').trim('[', ',', ' ', ']').split(",")
                     for (path in paths) {
@@ -475,6 +507,24 @@ class MicroAmper(val project: Project) {
                     compilerOptions {
                         suppressWarnings.set(true)
                     }
+                }
+            }
+        }
+
+        if (publishingEnabled) {
+            pluginManager.apply("com.vanniktech.maven.publish")
+            val ext = extensions.findByName("mavenPublishing")
+            if (ext != null) {
+                try {
+                    val method = ext::class.java.methods.firstOrNull { it.name == "coordinates" && it.parameterTypes.size == 3 }
+                    method?.invoke(
+                        ext,
+                        publishingGroup ?: GROUP,
+                        publishingName ?: project.name,
+                        publishingVersion ?: REAL_VERSION
+                    )
+                } catch (e: Throwable) {
+                    println("[MicroAmper] Failed to configure maven publishing coordinates: $e")
                 }
             }
         }

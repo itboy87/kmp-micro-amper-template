@@ -119,7 +119,7 @@ class MicroAmper(val project: Project) {
     ) {
         val rplatform = platform.takeIf { it.isNotEmpty() } ?: "common"
         val configuration =
-            "$rplatform${if (test) "Test" else "Main"}${if (exported) "Api" else if (compileOnly) "CompileOnly" else "Implementation"}"
+            "${if (rplatform == "android" && test) "androidUnitTest" else "$rplatform${if (test) "Test" else "Main"}"}${if (exported && !test) "Api" else if (compileOnly) "CompileOnly" else "Implementation"}"
     }
 
     fun parseFile(file: File, lines: List<String> = file.readLines()) {
@@ -249,7 +249,7 @@ class MicroAmper(val project: Project) {
                     it.resources.srcDirIfExists("resources$atName")
                     it.kotlin.srcDir("build/generated/ksp/$name/${name}Main/kotlin")
                 },
-                test = maybeCreate("${name}Test").also {
+                test = maybeCreate(if (name == "android") "androidUnitTest" else "${name}Test").also {
                     it.kotlin.srcDirIfExists("test$atName")
                     it.resources.srcDirIfExists("testResources$atName")
                     it.kotlin.srcDir("build/generated/ksp/$name/${name}Test/kotlin")
@@ -276,13 +276,41 @@ class MicroAmper(val project: Project) {
             }
         }
 
+        val needed = mutableSetOf("common")
+        for (platform in kotlinPlatforms) {
+            needed.add(platform)
+            val basePlatform = getKotlinBasePlatform(platform)
+            needed.add(basePlatform)
+
+            val isMacos = platform.startsWith("macos")
+            val isIos = platform.startsWith("ios")
+            val isTvos = platform.startsWith("tvos")
+            val isWatchos = platform.startsWith("watchos")
+            val isNative = platform.contains("X86") || platform.contains("X64") || platform.contains("Arm")
+            val isApple = isMacos || isIos || isTvos || isWatchos
+            val isLinux = platform.startsWith("linux")
+            val isPosix = isLinux || isApple
+
+            if (isNative) needed.add("native")
+            if (isPosix) needed.add("posix")
+            if (isApple) needed.add("apple")
+            if (isApple && !isWatchos) needed.add("appleNonWatchos")
+            if (isIos || isTvos) needed.add("appleIosTvos")
+            if (platform != "jvm" && platform != "android") needed.add("nonJvm")
+        }
+        for ((alias, platforms) in (kotlinAliases + kotlinBasePlatforms)) {
+            if (platforms.any { it in needed }) {
+                needed.add(alias)
+            }
+        }
+
         project.kotlin.sourceSets {
-            ssDependsOn("native", "common")
-            ssDependsOn("native", "nonJvm")
-            ssDependsOn("posix", "native")
-            ssDependsOn("apple", "posix")
-            ssDependsOn("appleNonWatchos", "apple")
-            ssDependsOn("appleIosTvos", "apple")
+            if ("native" in needed) ssDependsOn("native", "common")
+            if ("native" in needed && "nonJvm" in needed) ssDependsOn("native", "nonJvm")
+            if ("posix" in needed) ssDependsOn("posix", "native")
+            if ("apple" in needed) ssDependsOn("apple", "posix")
+            if ("appleNonWatchos" in needed) ssDependsOn("appleNonWatchos", "apple")
+            if ("appleIosTvos" in needed) ssDependsOn("appleIosTvos", "apple")
 
             maybeCreate("commonMain").kotlin.srcDir("build/generated/ksp/metadata/commonMain/kotlin")
 
@@ -388,19 +416,34 @@ class MicroAmper(val project: Project) {
 
         //kotlin.applyDefaultHierarchyTemplate()
 
+        /*kotlin.targets.forEach {
+            it.compilations.forEach {
+                it.compileTaskProvider.configure {
+                    compilerOptions {
+                        // apiVersion: Allow to use declarations only from the specified version of bundled libraries
+                        // languageVersion: Provide source compatibility with specified language version
+                        this.apiVersion.set(org.jetbrains.kotlin.gradle.dsl.KotlinVersion.KOTLIN_2_0)
+                        this.languageVersion.set(org.jetbrains.kotlin.gradle.dsl.KotlinVersion.KOTLIN_2_0)
+                    }
+                }
+            }
+        }*/
+
         kotlin.sourceSets {
             // jvm, js, wasm, android, linuxX64, linuxArm64, tvosArm64, tvosX64, tvosSimulatorArm64, macosX64, macosArm64, iosArm64, iosSimulatorArm64, iosX64, watchosArm64, watchosArm32, watchosDeviceArm64, watchosSimulatorArm64, mingwX64
 
             for ((alias, platforms) in (kotlinAliases + kotlinBasePlatforms)) {
-                //for ((alias, platforms) in kotlinAliases) {
-                ssDependsOn(alias, "common")
-                for (platform in platforms) ssDependsOn(platform, alias)
+                if (alias in needed) {
+                    ssDependsOn(alias, "common")
+                    for (platform in platforms) ssDependsOn(platform, alias)
+                }
             }
         }
         //println(" -> $platforms")
 
         dependencies {
             for (dep in deps) {
+                if (dep.rplatform != "common" && dep.rplatform !in needed) continue
                 add(
                     dep.configuration, when {
                         dep.path.contains('/') || dep.path.contains('\\') -> {

@@ -1,8 +1,8 @@
 [versions]
 libraryVersion = "0.0.1"
-kotlin = "2.1.10"
-agp = "8.7.3"
-mavenPublish = "0.30.0"
+kotlin = "2.3.10"
+agp = "8.13.2"
+mavenPublish = "0.36.0"
 
 [libraries]
 

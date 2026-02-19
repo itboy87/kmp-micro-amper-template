@@ -32,42 +32,44 @@ allprojects {
     version = REAL_VERSION
     group = GROUP
 
-    project.apply(plugin = "kotlin-multiplatform")
-    project.apply(plugin = "android-library")
+    val isAmperModule = project.file("module.yaml").exists()
+    if (project == rootProject || isAmperModule) {
+        project.apply(plugin = "kotlin-multiplatform")
+        project.apply(plugin = "android-library")
 
-    java.toolchain.languageVersion = JavaLanguageVersion.of(JDK_VERSION.majorVersion)
-    kotlin.jvmToolchain(JDK_VERSION.majorVersion.toInt())
-    afterEvaluate {
-        tasks.withType(Test::class) {
-            //this.javaLauncher.set()
-            this.javaLauncher.set(javaToolchains.launcherFor {
-                // 17 is latest at the current moment
-                languageVersion.set(JavaLanguageVersion.of(JDK_VERSION.majorVersion))
-            })
+        java.toolchain.languageVersion = JavaLanguageVersion.of(JDK_VERSION.majorVersion)
+        kotlin.jvmToolchain(JDK_VERSION.majorVersion.toInt())
+
+        android {
+            compileOptions {
+                sourceCompatibility = JDK_VERSION
+                targetCompatibility = JDK_VERSION
+            }
+            compileSdk = 35
+            namespace = "com.fleeksoft.${project.name.replace("-", ".")}"
+            defaultConfig {
+                minSdk = 21
+            }
+        }
+        if (isAmperModule) {
+            MicroAmper(this).configure()
+        }
+
+        // Workaround for AGP Lint requiring a build file in every project it's applied to
+        if (project != rootProject && !project.buildFile.exists()) {
+            project.projectDir.resolve("build.gradle").writeText("// Dummy build file for AGP Lint compatibility\n")
         }
     }
-
-    android {
-        compileOptions {
-            sourceCompatibility = JDK_VERSION
-            targetCompatibility = JDK_VERSION
-        }
-        compileSdk = 35
-        namespace = "com.fleeksoft.${project.name.replace("-", ".")}"
-        defaultConfig {
-            minSdk = 21
-        }
-    }
-    MicroAmper(this).configure()
 }
 
 subprojects {
+    if (!project.file("module.yaml").exists()) return@subprojects
     apply(plugin = "kotlin-multiplatform")
 
     kotlin {
         androidTarget {
             this.compilerOptions.jvmTarget.set(JVM_TARGET)
-            publishAllLibraryVariants()
+            publishLibraryVariants()
         }
     }
 
@@ -96,6 +98,7 @@ class MicroAmper(val project: Project) {
     private var kotlinPlatforms = mutableListOf<String>()
     private var kotlinAliases = LinkedHashMap<String, List<String>>()
     private var deps = mutableListOf<Dep>()
+    private var repos = mutableListOf<String>()
 
     //val kotlinBasePlatforms by lazy { kotlinPlatforms.groupBy { getKotlinBasePlatform(it) }.filter { it.value != listOf(it.key) } }
     val kotlinBasePlatforms by lazy { kotlinPlatforms.groupBy { getKotlinBasePlatform(it) } }
@@ -146,6 +149,12 @@ class MicroAmper(val project: Project) {
                             val platforms = platforms2.trim('[', ']', ' ').split(',').map { it.trim() }
                             //println(" -> alias=$alias, platforms=$platforms")
                             kotlinAliases[alias] = platforms
+                        }
+                    }
+
+                    mode == "repositories" -> {
+                        if (tline.startsWith("-")) {
+                            repos.add(tline.removePrefix("-").trim())
                         }
                     }
 
@@ -244,12 +253,29 @@ class MicroAmper(val project: Project) {
                     it.kotlin.srcDirIfExists("test$atName")
                     it.resources.srcDirIfExists("testResources$atName")
                     it.kotlin.srcDir("build/generated/ksp/$name/${name}Test/kotlin")
+                    if (name == "common") {
+                        it.dependencies {
+                            implementation(kotlin("test"))
+                        }
+                    }
                 }
             )
         }
     }
 
     fun applyTo() = with(project) {
+        if (repos.isNotEmpty()) {
+            repositories {
+                for (repo in repos) {
+                    if (repo == "mavenLocal") {
+                        mavenLocal()
+                    } else if (repo.startsWith("http")) {
+                        maven(repo)
+                    }
+                }
+            }
+        }
+
         project.kotlin.sourceSets {
             ssDependsOn("native", "common")
             ssDependsOn("native", "nonJvm")
@@ -279,12 +305,12 @@ class MicroAmper(val project: Project) {
                 if (platform != basePlatform) ssDependsOn(platform, basePlatform)
             }
 
-            all {
+            /*all {
                 languageSettings {
                     languageVersion = "2.0"
                     apiVersion = "2.0"
                 }
-            }
+            }*/
         }
 
         for (platform in kotlinPlatforms) {
@@ -296,17 +322,20 @@ class MicroAmper(val project: Project) {
                 }
 
                 "js" -> kotlin.js {
+                    outputModuleName = project.layout.projectDirectory.asFile.name
+                    binaries.library()
+                    generateTypeScriptDefinitions()
                     browser {
                         testTask {
                             useMocha {
-                                timeout = "9s"
+                                timeout = "15s"
                             }
                         }
                     }
                     nodejs {
                         testTask {
                             useMocha {
-                                timeout = "9s"
+                                timeout = "15s"
                             }
                         }
                     }
@@ -317,14 +346,14 @@ class MicroAmper(val project: Project) {
                         browser {
                             testTask {
                                 useMocha {
-                                    timeout = "9s"
+                                    timeout = "15s"
                                 }
                             }
                         }
                         nodejs {
                             testTask {
                                 useMocha {
-                                    timeout = "9s"
+                                    timeout = "15s"
                                 }
                             }
                         }
@@ -359,19 +388,6 @@ class MicroAmper(val project: Project) {
 
         //kotlin.applyDefaultHierarchyTemplate()
 
-        kotlin.targets.forEach {
-            it.compilations.forEach {
-                it.compileTaskProvider.configure {
-                    compilerOptions {
-                        // apiVersion: Allow to use declarations only from the specified version of bundled libraries
-                        // languageVersion: Provide source compatibility with specified language version
-                        this.apiVersion.set(org.jetbrains.kotlin.gradle.dsl.KotlinVersion.KOTLIN_2_0)
-                        this.languageVersion.set(org.jetbrains.kotlin.gradle.dsl.KotlinVersion.KOTLIN_2_0)
-                    }
-                }
-            }
-        }
-
         kotlin.sourceSets {
             // jvm, js, wasm, android, linuxX64, linuxArm64, tvosArm64, tvosX64, tvosSimulatorArm64, macosX64, macosArm64, iosArm64, iosSimulatorArm64, iosX64, watchosArm64, watchosArm32, watchosDeviceArm64, watchosSimulatorArm64, mingwX64
 
@@ -392,9 +408,9 @@ class MicroAmper(val project: Project) {
                             project(":$realPath")
                         }
 
-                        dep.path.startsWith("\$") -> {
+                        dep.path.startsWith("$") -> {
                             when (dep.path) {
-                                "\$kotlin-test" -> "org.jetbrains.kotlin:kotlin-test"
+                                "\$kotlin-test", "\$kotlin.test" -> "org.jetbrains.kotlin:kotlin-test"
                                 else -> {
                                     val result =
                                         libFinder.findLibrary(dep.path.replace("\$libs.", "").replace(".", "-"))

@@ -192,7 +192,7 @@ class MicroAmper(val project: Project) {
                 if (tline.startsWith("apply:")) {
                     val paths = tline.substringAfter(':').trim('[', ',', ' ', ']').split(",")
                     for (path in paths) {
-                        parseFile(file.parentFile.resolve(path))
+                        parseFile(file.parentFile.resolve(path.trim()))
                     }
                 }
             }
